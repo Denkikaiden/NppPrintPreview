@@ -74,12 +74,28 @@ Notepad++ 8 or later (64-bit)
 Windows 10 / 11
 
 
-■ Terms
+■ License
 
-This plugin is freeware. You can use it for free.
-You may redistribute the zip file for free, as long as you do not change its contents.
-Please do not distribute modified versions or sell it.
-The author is not responsible for any damage caused by using this plugin.
+MIT License (see LICENSE).
+You may use, copy, modify and redistribute this plugin, including its source code,
+as long as you keep the copyright notice and the license text.
+There is no warranty. The author is not responsible for any damage caused by using this plugin.
+(The readme.txt in the 1.0.0 zip still shows the earlier freeware terms. The MIT License replaces them.)
+
+
+■ Source code and building
+
+The source code is in this repository. Comments in the source are in Japanese.
+- src/NppPrintPreview.cpp : the whole plugin (one file)
+- src/NppPrintPreview.rc  : version information
+- build.ps1               : build script
+
+Requirements: Visual Studio 2019 or later with the C++ x64 build tools, PowerShell 7
+Build:  pwsh -File build.ps1
+Output: build\x64\NppPrintPreview.dll
+
+It does not use the Notepad++ source code or headers.
+The few definitions it needs are written in NppPrintPreview.cpp.
 
 It also works together with MultiColumnPreview (MulCoPre).
 
@@ -166,12 +182,26 @@ Notepad++ 8 以降（64 ビット版）
 Windows 10 / 11
 
 
-■ ご利用について
+■ ライセンス
 
-このプラグインはフリーウェアです。無料で使えます。
-zip の中身を変えずに無料で配るのであれば、再配布は自由です。
-中身を変えたものや、有料での配布はご遠慮ください。
-このプラグインを使ったことで起きた損害について、作者は責任を負いません。
+MIT ライセンスです（LICENSE を見てください）。
+著作権の表示とライセンスの文を残せば、ソースも含めて、使う・写す・変える・配ることが自由にできます。
+無保証です。このプラグインを使ったことで起きた損害について、作者は責任を負いません。
+（1.0.0 の zip の readme.txt には以前のフリーウェアの条件が書いてありますが、MIT ライセンスに置き換えました）
+
+
+■ ソースとビルド
+
+ソースはこのリポジトリにあります。ソースのコメントは日本語です。
+- src/NppPrintPreview.cpp：プラグインの本体（1 ファイル）
+- src/NppPrintPreview.rc ：版の情報
+- build.ps1              ：ビルド用のスクリプト
+
+必要なもの：Visual Studio 2019 以降（C++ の x64 ビルドツール）、PowerShell 7
+ビルド：pwsh -File build.ps1
+出力：build\x64\NppPrintPreview.dll
+
+Notepad++ のソースやヘッダーは使っていません。必要な定義だけを NppPrintPreview.cpp に書いています。
 
 MultiColumnPreview（MulCoPre）との連動機能もあります。
 
