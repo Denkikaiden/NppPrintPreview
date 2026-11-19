@@ -83,7 +83,10 @@ constexpr UINT RUNCOMMAND_USER = WM_USER + 3000;
 constexpr UINT NPPM_GETFULLCURRENTPATH = RUNCOMMAND_USER + 1;
 constexpr UINT NPPM_GETFILENAME = RUNCOMMAND_USER + 3;
 constexpr UINT NPPN_READY = 1000 + 1;
+constexpr UINT NPPN_SHUTDOWN = 1000 + 9;
 constexpr UINT NPPN_BUFFERACTIVATED = 1000 + 10;
+// Notepad++ の「ファイル」→「印刷…」の命令（Ctrl+P・メニュー・ツールバーのどれでもこの WM_COMMAND が来る）
+constexpr WORD IDM_FILE_PRINT = 40000 + 1000 + 10;
 static bool g_ready = false; // Notepad++ の起動が終わった（それまでの文書の切り替えは数えない）
 
 struct NppDarkColors {
@@ -200,7 +203,7 @@ struct SciRangeToFormat {
 // ---- プラグインの状態 ----
 
 static const wchar_t PLUGIN_NAME[] = L"NppPrintPreview";
-static const wchar_t PLUGIN_VERSION[] = L"1.0.0"; // NppPrintPreview.rc の FILEVERSION と合わせる
+static const wchar_t PLUGIN_VERSION[] = L"1.0.1"; // NppPrintPreview.rc の FILEVERSION と合わせる
 static const wchar_t VIEW_CLASS[] = L"NppPrintPreviewPage";
 
 static NppData g_npp{};
@@ -211,15 +214,20 @@ static bool g_en = false;
 static const wchar_t *TR(const wchar_t *ja, const wchar_t *en) { return g_en ? en : ja; }
 
 static void cmdPrintPreview();
+static void cmdToggleReplace();
 static void cmdMulCoPre();
 static void cmdSetLocation();
 static void cmdAbout();
 static void updateMenuTexts();
+static std::wstring locateExe();
+static void openNativePrint();
 
-constexpr int FUNC_MULCOPRE = 2;  // g_funcs の中の「MulCoPre で段組みプレビュー」の位置
+constexpr int FUNC_REPLACE = 1;   // g_funcs の中の「Notepad++ の印刷でプレビューを開く」の位置
+constexpr int FUNC_MULCOPRE = 3;  // g_funcs の中の「MulCoPre で段組みプレビュー」の位置
 
 static FuncItem g_funcs[] = {
     {L"印刷プレビュー…", cmdPrintPreview, 0, false, nullptr},
+    {L"Notepad++ の印刷でプレビューを開く", cmdToggleReplace, 0, false, nullptr},
     {L"", nullptr, 0, false, nullptr},  // 区切り線
     {L"MulCoPre で段組みプレビュー", cmdMulCoPre, 0, false, nullptr},
     {L"MulCoPre の場所を設定…", cmdSetLocation, 0, false, nullptr},
@@ -488,9 +496,10 @@ static void decideLanguage() {
 static const wchar_t *funcName(int i) {
     switch (i) {
     case 0: return TR(L"印刷プレビュー…", L"Print Preview...");
-    case 2: return TR(L"MulCoPre で段組みプレビュー", L"Multi-column Preview in MulCoPre");
-    case 3: return TR(L"MulCoPre の場所を設定…", L"Set MulCoPre Location...");
-    case 5: return TR(L"バージョン情報", L"About");
+    case 1: return TR(L"Notepad++ の印刷でプレビューを開く", L"Open Preview on Notepad++ Print");
+    case 3: return TR(L"MulCoPre で段組みプレビュー", L"Multi-column Preview in MulCoPre");
+    case 4: return TR(L"MulCoPre の場所を設定…", L"Set MulCoPre Location...");
+    case 6: return TR(L"バージョン情報", L"About");
     }
     return L"";
 }
@@ -599,6 +608,8 @@ enum {
     ID_PAGE,
     ID_ZOOM,
     ID_VIEW,
+    ID_NATIVE,    // Notepad++ の印刷画面を開く（逃げ道）
+    ID_TOMULCO,   // MulCoPre で段組み（MulCoPre がなければ灰色）
     ID_SCI = 999,
     ID_LABEL = 200,
 };
@@ -632,6 +643,9 @@ struct Preview {
     HWND eMargin[4] = {};
     HWND bReset = nullptr, chkSel = nullptr, sInfo = nullptr, sStatus = nullptr, eCopies = nullptr, bPrint = nullptr,
          bClose = nullptr, bPrev = nullptr, bNext = nullptr, sPage = nullptr, cZoom = nullptr;
+    // 1.0.1：プレビューを閉じてほかの印刷へ移るボタン。押したらプレビューを閉じたあとで afterClose の処理をする
+    HWND bNative = nullptr, bToMulCo = nullptr;
+    int afterClose = 0;  // 0：何もしない、1：Notepad++ の印刷画面、2：MulCoPre で段組み
     HWND lbl[LB_COUNT] = {};
     HFONT uiFont = nullptr;
     int dpi = 96;
@@ -1442,7 +1456,11 @@ static void layout(Preview &p) {
     const int langY = bottomY - S(p, 26) - rowH - gap;
     MoveWindow(p.lbl[LB_LANG], x, langY + S(p, 3), lblW, rowH, TRUE);
     MoveWindow(p.cLang, x + lblW, langY, w - lblW, listH, TRUE);
-    MoveWindow(p.sInfo, x, y, w, std::max(S(p, 40), langY - S(p, 8) - y), TRUE);
+    // ほかの印刷へ移るボタン 2 つ（表示言語の上に横に並べる）
+    const int otherH = S(p, 28), otherY = langY - S(p, 10) - otherH, otherW = (w - gap) / 2;
+    MoveWindow(p.bNative, x, otherY, otherW, otherH, TRUE);
+    MoveWindow(p.bToMulCo, x + otherW + gap, otherY, w - otherW - gap, otherH, TRUE);
+    MoveWindow(p.sInfo, x, y, w, std::max(S(p, 40), otherY - S(p, 8) - y), TRUE);
     MoveWindow(p.lbl[LB_COPIES], x, bottomY + S(p, 6), S(p, 40), rowH, TRUE);
     MoveWindow(p.eCopies, x + S(p, 40), bottomY + S(p, 3), S(p, 44), rowH, TRUE);
     MoveWindow(p.bPrint, x + w - S(p, 186), bottomY, S(p, 90), bottomH, TRUE);
@@ -1674,6 +1692,8 @@ static void applyTexts(Preview &p) {
     SetWindowTextW(p.chkLn, TR(L"行番号を印刷する", L"Print line numbers"));
     SetWindowTextW(p.bPrint, TR(L"印刷", L"Print"));
     SetWindowTextW(p.bClose, TR(L"閉じる", L"Close"));
+    SetWindowTextW(p.bNative, TR(L"Notepad++ で印刷…", L"Notepad++ Print..."));
+    SetWindowTextW(p.bToMulCo, TR(L"MulCoPre で段組み…", L"MulCoPre Columns..."));
     SetWindowTextW(p.sStatus, L"");
 
     auto refill = [](HWND combo, std::initializer_list<const wchar_t *> items, int sel) {
@@ -1773,6 +1793,9 @@ static void initPreview(Preview &p) {
     p.eCopies = mk(p, L"EDIT", L"1", editStyle | ES_NUMBER, ID_COPIES, WS_EX_CLIENTEDGE);
     p.bPrint = mk(p, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_PRINT);
     p.bClose = mk(p, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL);
+    p.bNative = mk(p, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_NATIVE);
+    p.bToMulCo = mk(p, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, ID_TOMULCO);
+    EnableWindow(p.bToMulCo, !locateExe().empty());  // MulCoPre がなければ灰色（案内は出さない）
     p.bPrev = mk(p, L"BUTTON", L"◀", BS_PUSHBUTTON | WS_TABSTOP, ID_PREV);
     p.sPage = mk(p, L"STATIC", L"", SS_CENTER | SS_CENTERIMAGE | SS_NOPREFIX, ID_PAGE);
     p.bNext = mk(p, L"BUTTON", L"▶", BS_PUSHBUTTON | WS_TABSTOP, ID_NEXT);
@@ -1962,6 +1985,15 @@ static INT_PTR CALLBACK dlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_PRINT:
             if (code == BN_CLICKED) doPrint(*p);
             return TRUE;
+        case ID_NATIVE:
+        case ID_TOMULCO:
+            // プレビューを閉じてから、Notepad++ の印刷画面・MulCoPre を開く（cmdPrintPreview の終わりで）
+            if (code == BN_CLICKED) {
+                p->afterClose = id == ID_NATIVE ? 1 : 2;
+                saveSettings(*p);
+                EndDialog(hwnd, 0);
+            }
+            return TRUE;
         case ID_PREV:
             if (code == BN_CLICKED) setPage(*p, p->cur - 1);
             return TRUE;
@@ -2004,6 +2036,44 @@ static void cmdPrintPreview() {
     Preview p;
     p.mainSci = mainSci;
     DialogBoxIndirectParamW(g_module, &g_tpl.t, g_npp._nppHandle, dlgProc, reinterpret_cast<LPARAM>(&p));
+    if (p.afterClose == 1) openNativePrint();
+    else if (p.afterClose == 2) cmdMulCoPre();
+}
+
+// ---- Notepad++ の印刷の代わりにプレビューを開く（1.0.1、初めは入。ini の [General] ReplacePrint=0 で切） ----
+// Notepad++ の窓の WM_COMMAND を SetWindowSubclass で先に見て、「印刷…」（IDM_FILE_PRINT）ならプレビューを開く。
+// Ctrl+P・メニュー・ツールバーのボタンは、どれもこの命令で来る。「今すぐ印刷」など、ほかの命令は触らない
+
+static bool g_bypassPrint = false;  // 自分で Notepad++ の印刷画面を開くときは素通しにする
+static bool g_subclassed = false;
+
+static bool replaceEnabled() { return iniGet(L"General", L"ReplacePrint") != L"0"; }
+
+static LRESULT CALLBACK nppProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_COMMAND && LOWORD(wp) == IDM_FILE_PRINT && !g_bypassPrint && replaceEnabled()) {
+        cmdPrintPreview();
+        return 0;
+    }
+    return DefSubclassProc(hwnd, msg, wp, lp);
+}
+
+/// Notepad++ のふつうの印刷画面を開く（割り込みを素通しにして「印刷…」を送る）
+static void openNativePrint() {
+    g_bypassPrint = true;
+    SendMessageW(g_npp._nppHandle, WM_COMMAND, IDM_FILE_PRINT, 0);
+    g_bypassPrint = false;
+}
+
+static void updateReplaceCheck() {
+    HMENU menu = GetMenu(g_npp._nppHandle);
+    int id = g_funcs[FUNC_REPLACE]._cmdID;
+    if (!menu || id == 0) return;
+    CheckMenuItem(menu, static_cast<UINT>(id), MF_BYCOMMAND | (replaceEnabled() ? MF_CHECKED : MF_UNCHECKED));
+}
+
+static void cmdToggleReplace() {
+    iniSet(L"General", L"ReplacePrint", replaceEnabled() ? L"0" : L"");
+    updateReplaceCheck();
 }
 
 // ---- MulCoPre との連動（MulCoPre があるときだけ使える） ----
@@ -2349,6 +2419,7 @@ extern "C" __declspec(dllexport) FuncItem *getFuncsArray(int *count) {
     decideLanguage();
     for (int i = 0; i < static_cast<int>(sizeof(g_funcs) / sizeof(g_funcs[0])); ++i)
         if (g_funcs[i]._pFunc) wcsncpy_s(g_funcs[i]._itemName, funcName(i), _TRUNCATE);
+    g_funcs[FUNC_REPLACE]._init2Check = replaceEnabled();
     *count = static_cast<int>(sizeof(g_funcs) / sizeof(g_funcs[0]));
     return g_funcs;
 }
@@ -2358,8 +2429,20 @@ extern "C" __declspec(dllexport) void beNotified(SCNotification *n) {
     // 起動時に加え、文書を切り替えるたび（ファイルを開いたときも）灰色の状態を当て直す。
     // Notepad++ がメニューの状態を戻すことがあり、ファイルを開いたあと押せる状態になっていた（2026-11-16 ユーザー指摘）。
     // 当て直すときに MulCoPre を探し直すので、あとから入れた・消した MulCoPre にも追いつく
-    if (n->nmhdr.code == NPPN_READY || (g_ready && n->nmhdr.code == NPPN_BUFFERACTIVATED)) updateMulCoPreMenu();
-    if (n->nmhdr.code == NPPN_READY) g_ready = true;
+    if (n->nmhdr.code == NPPN_READY || (g_ready && n->nmhdr.code == NPPN_BUFFERACTIVATED)) {
+        updateMulCoPreMenu();
+        updateReplaceCheck();  // 灰色と同じく、チェックも戻されることがあるので当て直す
+    }
+    if (n->nmhdr.code == NPPN_READY) {
+        g_ready = true;
+        // 割り込みは常に付けておき、入・切は命令が来たときに ini で見る（切り替えてすぐ効く）
+        if (!g_subclassed) g_subclassed = SetWindowSubclass(g_npp._nppHandle, nppProc, 1, 0) != FALSE;
+        updateReplaceCheck();
+    }
+    if (n->nmhdr.code == NPPN_SHUTDOWN && g_subclassed) {
+        RemoveWindowSubclass(g_npp._nppHandle, nppProc, 1);
+        g_subclassed = false;
+    }
 }
 
 extern "C" __declspec(dllexport) LRESULT messageProc(UINT, WPARAM, LPARAM) { return TRUE; }
